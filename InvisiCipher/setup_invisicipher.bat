@@ -13,6 +13,11 @@ call .venv\Scripts\activate
 REM Upgrade pip
 python -m pip install --upgrade pip setuptools wheel
 
+REM Install TensorFlow CPU version first for compatibility
+echo Installing TensorFlow CPU for compatibility...
+pip uninstall tensorflow tensorflow-cpu -y >nul 2>&1
+pip install tensorflow-cpu==2.16.1 opencv-python==4.8.1.78 numpy==1.26.4
+
 REM Install project requirements if present
 if exist requirements.txt (
   pip install -r requirements.txt

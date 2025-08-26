@@ -10,6 +10,11 @@ source .venv/bin/activate
 
 python -m pip install --upgrade pip setuptools wheel
 
+# Install TensorFlow CPU version first for compatibility
+echo "Installing TensorFlow CPU for compatibility..."
+pip uninstall tensorflow tensorflow-cpu -y >/dev/null 2>&1 || true
+pip install tensorflow-cpu==2.16.1 opencv-python==4.8.1.78 numpy==1.26.4
+
 if [ -f requirements.txt ]; then
   pip install -r requirements.txt
 else

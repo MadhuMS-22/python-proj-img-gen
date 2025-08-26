@@ -35,16 +35,18 @@ def install_requirements():
     run([py, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
     
     # Handle TensorFlow installation carefully
-    print("[+] Installing TensorFlow with specific version...")
+    print("[+] Installing TensorFlow CPU version for compatibility...")
     try:
         # Uninstall any existing tensorflow to avoid conflicts
-        subprocess.call([py, "-m", "pip", "uninstall", "tensorflow", "-y"])
-        # Install specific TensorFlow version
-        run([py, "-m", "pip", "install", "tensorflow==2.10.0"])
+        subprocess.call([py, "-m", "pip", "uninstall", "tensorflow", "tensorflow-cpu", "-y"])
+        # Install compatible TensorFlow CPU version
+        run([py, "-m", "pip", "install", "tensorflow-cpu==2.16.1"])
+        # Install compatible OpenCV and numpy versions
+        run([py, "-m", "pip", "install", "opencv-python==4.8.1.78", "numpy==1.26.4"])
     except subprocess.CalledProcessError:
-        print("[!] TensorFlow installation failed, trying alternative approach...")
-        # Fallback: install without version constraint
-        run([py, "-m", "pip", "install", "tensorflow"])
+        print("[!] TensorFlow CPU installation failed, trying fallback...")
+        # Fallback: install latest CPU version
+        run([py, "-m", "pip", "install", "tensorflow-cpu", "opencv-python==4.8.1.78", "numpy==1.26.4"])
     
     # Install other requirements
     req = ROOT / "requirements.txt"

@@ -3,12 +3,14 @@ import sys
 
 import cv2
 import shutil
-import numpy as np
-import torch
+import os
+import sys
+import re
 import requests
-from PyQt5.QtCore import QFile, QTextStream
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon, QPixmap, QFont, QPainter, QColor
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from auth_screen import show_auth_screen
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, \
     QMessageBox, QFileDialog, QDialog, QRadioButton, QButtonGroup, QLineEdit, QScrollArea, QSizePolicy
 
@@ -33,6 +35,9 @@ class MainAppWindow(QMainWindow):
         super().__init__()
         # vars
         self.last_download_path = None
+        self.current_user = None
+        self.auth_token = None
+        self.is_authenticated = False
         self.main_content = None
         self.blowfish_radio_dec = None
         self.aes_radio_dec = None
@@ -104,9 +109,9 @@ class MainAppWindow(QMainWindow):
         super_resolution_button = QPushButton("Super Resolution")
 
         # Connect button signals to their corresponding slots
-        encryption_button.clicked.connect(self.show_encryption_page)
+        encryption_button.clicked.connect(self.show_image_hide_page)
         decryption_button.clicked.connect(self.show_decryption_page)
-        image_hiding_button.clicked.connect(self.show_image_hiding_page)
+        image_hiding_button.clicked.connect(self.show_image_hide_page)
         image_reveal_button.clicked.connect(self.show_reveal_page)
         super_resolution_button.clicked.connect(self.show_super_resolution_page)
 
@@ -119,18 +124,16 @@ class MainAppWindow(QMainWindow):
         side_layout.addWidget(decryption_button)
         side_layout.addWidget(image_reveal_button)
         side_layout.addWidget(super_resolution_button)
-        # Auth buttons below navigation
-        login_button = QPushButton("Log in")
-        signup_button = QPushButton("Sign up")
-        login_button.clicked.connect(self.show_login_page)
-        signup_button.clicked.connect(self.show_signup_page)
-        side_layout.addWidget(login_button)
-        side_layout.addWidget(signup_button)
 
-        # Add a logout button
+        # Add logout/exit button based on authentication status
         logout_button = QPushButton("Exit")
         logout_button.setObjectName("logout_button")
-        logout_button.clicked.connect(self.logout)
+        if self.is_authenticated:
+            logout_button.setText("Logout")
+            logout_button.clicked.connect(self.handle_logout)
+        else:
+            logout_button.clicked.connect(self.close)
+        
         side_layout.addStretch()
         side_layout.addWidget(logout_button)
 
@@ -160,10 +163,32 @@ class MainAppWindow(QMainWindow):
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
-        # Populate home page content
-        self.show_home_page()
+        # Show authentication screen on startup
+        self.show_auth_screen()
+        
+        # Hide sidebar during authentication
+        self.hide_sidebar()
 
-    def show_encryption_page(self):
+    def show_image_reveal_page(self):
+        # Only allow access if authenticated
+        if not self.is_authenticated:
+            self.show_auth_screen()
+            return
+            
+        # Redirect to reveal page
+        self.show_reveal_page()
+        self.image_tobe_enc_filepath = None
+        self.key_text_box = None
+        self.enc_img_text_label = None
+        # Clear the main window layout
+        self.clear_main_layout()
+
+    def show_image_hide_page(self):
+        # Only allow access if authenticated
+        if not self.is_authenticated:
+            self.show_auth_screen()
+            return
+            
         # ensure bg applied
         bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
         if os.path.exists(bg_path):
@@ -524,11 +549,13 @@ class MainAppWindow(QMainWindow):
         self.download_revealed_secret_image_button.clicked.connect(lambda: self.download_image())
         button_layout.addWidget(self.download_revealed_secret_image_button)
 
-        button_layout_widget = QWidget()
-        button_layout_widget.setLayout(button_layout)
-        self.main_layout.addWidget(button_layout_widget)
-
     def show_super_resolution_page(self):
+        # Only allow access if authenticated
+        if not self.is_authenticated:
+            self.show_auth_screen()
+            return
+            
+        # ensure bg applied
         bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
         if os.path.exists(bg_path):
             self.main_content.set_background_image(bg_path)
@@ -601,465 +628,637 @@ class MainAppWindow(QMainWindow):
         self.image_label = image_label
         self.download_HR_button = download_button
 
-    def select_low_resolution_image(self, label):
-        file_dialog = QFileDialog()
-        low_res_image_filepath, _ = file_dialog.getOpenFileName(self, "Select Low Resolution Image")
-        if low_res_image_filepath:
-            self.low_res_image_filepath = low_res_image_filepath
-            self.set_label_image_box(label, low_res_image_filepath, 384, 384)
-            self.style_image_box(label)
-
-    def upscaleImage(self, label):
-        if self.low_res_image_filepath is None:
-            QMessageBox.information(self, "Upscaling Error", "Please select the low-resolution image first.")
-            return
-        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:400"
-        model_path = os.path.join(os.path.dirname(BASE_DIR), "models/ESRGAN/models/RRDB_ESRGAN_x4.pth")
-        if not os.path.exists(model_path):
-            QMessageBox.critical(self, "Upscaling Error", f"ESRGAN model not found at:\n{model_path}")
-            return
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-        model = arch.RRDBNet(3, 3, 64, 23, gc=32)
-        state_dict = torch.load(model_path, map_location=device)
-        model.load_state_dict(state_dict, strict=True)
-        model.eval()
-        model = model.to(device)
-
-        print('Model path {:s}. \nUp-scaling...'.format(model_path))
-
-        image = cv2.imread(self.low_res_image_filepath, cv2.IMREAD_COLOR)
-        image = image * 1.0 / 255
-        image = torch.from_numpy(np.transpose(image[:, :, [2, 1, 0]], (2, 0, 1))).float()
-        image_low_res = image.unsqueeze(0)
-        image_low_res = image_low_res.to(device)
-
-        with torch.no_grad():
-            image_high_res = model(image_low_res).data.squeeze().float().cpu().clamp_(0, 1).numpy()
-        image_high_res = np.transpose(image_high_res[[2, 1, 0], :, :], (1, 2, 0))
-        image_high_res = (image_high_res * 255.0).round().astype(np.uint8)
-
-        high_res_image_path = os.path.abspath(os.path.join(os.path.dirname(BASE_DIR), "upscaled.png"))
-        cv2.imwrite(high_res_image_path, image_high_res)
-
-        # Display the high resolution image
-        if os.path.exists(high_res_image_path):
-            print("image saved as: ", high_res_image_path)
-            self.set_label_image_box(label, high_res_image_path, 384, 384)
-            self.low_res_image_text_label.setText("High Res Image:")
-            self.low_res_image_text_label.setStyleSheet(
-                "font-size: 16px; color: #00ff00; margin-bottom: 10px; font-weight: bold;")
-            self.download_HR_button.setEnabled(True)
-            self.last_download_path = high_res_image_path
-        else:
-            QMessageBox.critical(self, "Upscaling Error", "Failed to upscale the image.")
-
-    def download_image(self):
-        if not self.last_download_path or not os.path.exists(self.last_download_path):
-            QMessageBox.information(self, "Download", "Nothing to download yet.")
-            return
-        target, _ = QFileDialog.getSaveFileName(self, "Save File As", os.path.basename(self.last_download_path))
-        if not target:
-            return
-        try:
-            shutil.copyfile(self.last_download_path, target)
-            QMessageBox.information(self, "Download", f"Saved to {target}")
-        except Exception as e:
-            QMessageBox.critical(self, "Download Error", f"Failed to save: {e}")
-
-    def clear_main_layout(self):
-        # Remove all widgets from the main layout
-        while self.main_layout.count():
-            child = self.main_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-    def select_cover_image(self, label):
-        file_dialog = QFileDialog()
-        filepath, _ = file_dialog.getOpenFileName(self, "Select cover Image")
-        if filepath:
-            self.cover_image_filepath = filepath
-            self.set_label_image_box(label, filepath, 256, 256)
-            self.style_image_box(label)
-
-    def select_secret_image(self, label):
-        file_dialog = QFileDialog()
-        filepath, _ = file_dialog.getOpenFileName(self, "Select secret Image")
-        if filepath:
-            self.secret_image_filepath = filepath
-            self.set_label_image_box(label, filepath, 256, 256)
-            self.style_image_box(label)
-
-    def select_container_image(self, label):
-        file_dialog = QFileDialog()
-        filepath, _ = file_dialog.getOpenFileName(self, "Select secret Image")
-        if filepath:
-            self.container_image_filepath = filepath
-            self.set_label_image_box(label, filepath, 256, 256)
-            self.style_image_box(label)
-
-    def select_enc_image(self, label):
-        file_dialog = QFileDialog()
-        filepath, _ = file_dialog.getOpenFileName(self, "Select Image")
-        if filepath:
-            self.image_tobe_enc_filepath = filepath
-            self.set_label_image_box(label, filepath, 256, 256)
-            self.style_image_box(label)
-
-    def select_dec_image(self, label):
-        file_dialog = QFileDialog()
-        filepath, _ = file_dialog.getOpenFileName(self, "Select enc file")
-        if filepath:
-            self.enc_filepath = filepath
-            self.set_label_placeholder(label, 256, 256, "Select the image")
-
-    def _placeholder_pixmap(self, width, height, text="Select the image"):
-        bg_path = os.path.join(PROJECT_ROOT, "imgbg.jpg")
+    def show_reveal_page(self):
+        bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
         if os.path.exists(bg_path):
-            bg = QPixmap(bg_path)
-            scaled = bg.scaled(width, height, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            x = (scaled.width() - width) // 2
-            y = (scaled.height() - height) // 2
-            canvas = scaled.copy(x, y, width, height)
-        else:
-            canvas = QPixmap(width, height)
-            canvas.fill(QColor(50, 50, 50))
-        painter = QPainter(canvas)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QColor(255, 255, 255))
-        f = QFont()
-        f.setPointSize(12)
-        f.setBold(True)
-        painter.setFont(f)
-        painter.drawText(canvas.rect(), Qt.AlignCenter, text)
-        painter.end()
-        return canvas
-
-    def set_label_placeholder(self, label: QLabel, width: int, height: int, text: str):
-        label.setAlignment(Qt.AlignCenter)
-        label.setPixmap(self._placeholder_pixmap(width, height, text))
-        self.style_image_box(label)
-
-    def style_image_box(self, label: QLabel):
-        label.setStyleSheet(
-            "border: 2px solid #d62828; border-radius: 8px; background-color: rgba(0,0,0,80);"
-        )
-        pm = label.pixmap()
-        if pm is not None:
-            label.setFixedSize(pm.width(), pm.height())
-
-    def set_label_image_box(self, label: QLabel, image_path: str, box_width: int, box_height: int):
-        try:
-            src = QPixmap(image_path)
-            if src.isNull():
-                self.set_label_placeholder(label, box_width, box_height, "Select the image")
-                return
-            scaled = src.scaled(box_width, box_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            canvas = QPixmap(box_width, box_height)
-            canvas.fill(QColor(0, 0, 0, 0))
-            painter = QPainter(canvas)
-            x = (box_width - scaled.width()) // 2
-            y = (box_height - scaled.height()) // 2
-            painter.drawPixmap(x, y, scaled)
-            painter.end()
-            label.setPixmap(canvas)
-            label.setFixedSize(box_width, box_height)
-        except Exception:
-            self.set_label_placeholder(label, box_width, box_height, "Select the image")
-
-    def logout(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Exit")
-        dialog.setMinimumSize(450, 100)
-
-        layout = QVBoxLayout(dialog)
-        msg_box = QMessageBox()
-        msg_box.setText("<h3>Are you sure you want to Exit?</h3>")
-
-        # Set custom font and size
-        font = QFont("Arial", 12)  # Adjust the font and size as desired
-        msg_box.setFont(font)
-
-        button_layout = QHBoxLayout()
-        layout.addWidget(msg_box)
-        layout.addLayout(button_layout)
-
-        # Remove the standard buttons
-        msg_box.setStandardButtons(QMessageBox.NoButton)
-
-        yes_button = QPushButton("Yes")
-        yes_button.setStyleSheet("color: #000000;")
-        yes_button.clicked.connect(lambda: QApplication.quit())
-
-        no_button = QPushButton("No")
-        no_button.setStyleSheet("color: #000000;")
-        no_button.clicked.connect(dialog.reject)
-
-        button_layout.addWidget(yes_button)
-        button_layout.addWidget(no_button)
-
-        dialog.exec_()
-
-    def load_stylesheet(self):
-        stylesheet = QFile(os.path.join(BASE_DIR, "styles/style.qss"))
-        if stylesheet.open(QFile.ReadOnly | QFile.Text):
-            stream = QTextStream(stylesheet)
-            self.setStyleSheet(stream.readAll())
-
-    def show_home_page(self):
+            self.main_content.set_background_image(bg_path)
         self.clear_main_layout()
-        # Apply page margins for full-width blocks
-        self.main_layout.setContentsMargins(16, 16, 16, 16)
-        # Logo on home page
-        logo_home = QLabel()
-        lp = QPixmap(os.path.join(PROJECT_ROOT, "logo.png"))
-        if not lp.isNull():
-            logo_home.setPixmap(lp.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        logo_home.setAlignment(Qt.AlignCenter)
-        self.main_layout.addWidget(logo_home)
-        # Title
-        title_label = QLabel("<h1>ImageSteganography</h1>")
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet("font-size: 42px; color: #d62828; font-weight: 800; letter-spacing: 1px;")
+
+        # Add content to the super resolution page
+        title_label = QLabel("<H2>STEGO CNN : Steganography Reveal</H2>")
+        title_label.setStyleSheet("font-size: 24px; color: #ffffff;")
+        title_label.setAlignment(Qt.AlignTop)
         self.main_layout.addWidget(title_label)
 
-        # Overview info (full paragraph)
-        info = QLabel(
-            "<div style='color:#f0f0f0; font-size:20px; text-align:center; line-height:1.9'>"
-            "ImageSteganography is a desktop application that lets you seamlessly embed a secret image inside a cover image "
-            "using a convolutional neural network. You can optionally secure files with AES or Blowfish encryption, recover the "
-            "hidden content later with the paired reveal model, and improve clarity of low‑resolution images using ESRGAN super‑resolution. "
-            "All workflows are available through an elegant, offline‑friendly PyQt interface."
-            "</div>"
+        # STEGO CNN model path label
+        model_path_label = QLabel("<h5>Model Path: InvisiCipher/app/models/DEEP_STEGO/models/reveal.h5</h5>")
+        model_path_label.setStyleSheet("font-size: 16px; color: #c6c6c6;")
+        model_path_label.setAlignment(Qt.AlignTop)
+        self.main_layout.addWidget(model_path_label)
+
+        # GPU Info
+        gpu_info_label = QLabel("<b><ul><li>Device info will appear if available</li></ul></b>")
+        gpu_info_label.setStyleSheet("font-size: 13px; color: #fae69e;")
+        gpu_info_label.setAlignment(Qt.AlignTop)
+        self.main_layout.addWidget(gpu_info_label)
+
+        # image text layout
+        image_text_layout = QHBoxLayout()
+        container_text_label = QLabel("Select steg image:")
+        container_text_label.setAlignment(Qt.AlignCenter)
+        container_text_label.setStyleSheet("font-size: 16px; color: #c6c6c6; margin-bottom: 10px; font-weight: bold;")
+        image_text_layout.addWidget(container_text_label)
+
+        secret_out_text_label = QLabel("Revealed secret image:")
+        secret_out_text_label.setAlignment(Qt.AlignCenter)
+        secret_out_text_label.setStyleSheet("font-size: 16px; color: #00ff00; margin-bottom: 10px; font-weight: bold;")
+        image_text_layout.addWidget(secret_out_text_label)
+        # keep a reference for status updates after reveal
+        self.secret_out_text_label = secret_out_text_label
+
+        image_text_layout_widget = QWidget()
+        image_text_layout_widget.setLayout(image_text_layout)
+        self.main_layout.addWidget(image_text_layout_widget)
+        
+        # Image display layout
+        image_layout = QHBoxLayout()
+        self.container_display_label = QLabel()
+        self.container_display_label.setAlignment(Qt.AlignCenter)
+        self.set_label_placeholder(self.container_display_label, 256, 256, "Select the image")
+        image_layout.addWidget(self.container_display_label)
+        
+        self.secret_out_display_label = QLabel()
+        self.secret_out_display_label.setAlignment(Qt.AlignCenter)
+        self.set_label_placeholder(self.secret_out_display_label, 256, 256, "Select the image")
+        image_layout.addWidget(self.secret_out_display_label)
+
+        image_layout_widget = QWidget()
+        image_layout_widget.setLayout(image_layout)
+        self.main_layout.addWidget(image_layout_widget)
+
+        # button layout
+        button_layout = QHBoxLayout()
+        clear_button = QPushButton("Clear")
+        clear_button.clicked.connect(lambda: self.show_reveal_page())
+        button_layout.addWidget(clear_button)
+
+        browse_cover_button = QPushButton("Browse steg image")
+        browse_cover_button.clicked.connect(lambda: self.select_container_image(self.container_display_label))
+        button_layout.addWidget(browse_cover_button)
+
+        reveal_button = QPushButton("Reveal")
+        reveal_button.clicked.connect(lambda: self.perform_reveal(self.container_image_filepath))
+        button_layout.addWidget(reveal_button)
+
+        self.download_revealed_secret_image_button = QPushButton("Download🔽")
+        self.download_revealed_secret_image_button.setEnabled(False)
+        self.download_revealed_secret_image_button.clicked.connect(lambda: self.download_image())
+        button_layout.addWidget(self.download_revealed_secret_image_button)
+
+        button_layout_widget = QWidget()
+        button_layout_widget.setLayout(button_layout)
+        self.main_layout.addWidget(button_layout_widget)
+
+    def show_decryption_page(self):
+        # Only allow access if authenticated
+        if not self.is_authenticated:
+            self.show_auth_screen()
+            return
+            
+        # ensure bg applied
+        bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
+        if os.path.exists(bg_path):
+            self.main_content.set_background_image(bg_path)
+        
+        self.clear_main_layout()
+
+        # Add content to the decryption page
+        title_label = QLabel("<H2>STEGO CNN : Steganography Decrypt</H2>")
+        title_label.setStyleSheet("font-size: 24px; color: #ffffff;")
+        title_label.setAlignment(Qt.AlignTop)
+        self.main_layout.addWidget(title_label)
+
+        # STEGO CNN model path label
+        model_path_label = QLabel("<h5>Model Path: InvisiCipher/app/models/DEEP_STEGO/models/decrypt.h5</h5>")
+        model_path_label.setStyleSheet("font-size: 16px; color: #c6c6c6;")
+        model_path_label.setAlignment(Qt.AlignTop)
+        self.main_layout.addWidget(model_path_label)
+
+        # GPU Info
+        gpu_info_label = QLabel("<b><ul><li>Device info will appear if available</li></ul></b>")
+        gpu_info_label.setStyleSheet("font-size: 13px; color: #fae69e;")
+        gpu_info_label.setAlignment(Qt.AlignTop)
+        self.main_layout.addWidget(gpu_info_label)
+
+        # label layout
+        label_layout = QHBoxLayout()
+        enc_text_label = QLabel("Select encrypted image:")
+        enc_text_label.setAlignment(Qt.AlignCenter)
+        enc_text_label.setStyleSheet("font-size: 16px; color: #c6c6c6; margin-bottom: 10px; font-weight: bold;")
+        label_layout.addWidget(enc_text_label)
+
+        dec_text_label = QLabel("Decrypted image:")
+        dec_text_label.setAlignment(Qt.AlignCenter)
+        dec_text_label.setStyleSheet("font-size: 16px; color: #00ff00; margin-bottom: 10px; font-weight: bold;")
+        label_layout.addWidget(dec_text_label)
+
+        label_layout_widget = QWidget()
+        label_layout_widget.setLayout(label_layout)
+        self.main_layout.addWidget(label_layout_widget)
+
+        # Image  display layout
+        image_display_layout = QHBoxLayout()
+        self.enc_display_label = QLabel()
+        self.enc_display_label.setAlignment(Qt.AlignCenter)
+        self.set_label_placeholder(self.enc_display_label, 256, 256, "Select the image")
+        image_display_layout.addWidget(self.enc_display_label)
+
+        self.dec_display_label = QLabel()
+        self.dec_display_label.setAlignment(Qt.AlignCenter)
+        self.set_label_placeholder(self.dec_display_label, 256, 256, "Select the image")
+        image_display_layout.addWidget(self.dec_display_label)
+
+        image_display_layout_widget = QWidget()
+        image_display_layout_widget.setLayout(image_display_layout)
+        self.main_layout.addWidget(image_display_layout_widget)
+
+        # button layout
+        button_layout = QHBoxLayout()
+        clear_button = QPushButton("Clear")
+        clear_button.clicked.connect(lambda: self.show_decryption_page())
+        button_layout.addWidget(clear_button)
+
+        browse_enc_button = QPushButton("Browse encrypted file")
+        browse_enc_button.clicked.connect(lambda: self.select_dec_image(self.dec_display_label))
+        button_layout.addWidget(browse_enc_button)
+
+        decrypt_button = QPushButton("Decrypt")
+        decrypt_button.clicked.connect(lambda: self.perform_decryption(self.enc_filepath))
+        button_layout.addWidget(decrypt_button)
+
+        self.download_dec_button = QPushButton("Download🔽")
+        self.download_dec_button.setEnabled(False)
+        self.download_dec_button.clicked.connect(lambda: self.download_image())
+        button_layout.addWidget(self.download_dec_button)
+
+        button_layout_widget = QWidget()
+        button_layout_widget.setLayout(button_layout)
+        self.main_layout.addWidget(button_layout_widget)
+
+    def show_auth_screen(self):
+        """Show authentication screen on app startup"""
+        show_auth_screen(self)
+
+    def handle_logout(self):
+        """Handle user logout"""
+        reply = QMessageBox.question(
+            self,
+            "Logout",
+            "Are you sure you want to logout?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
-        info.setAlignment(Qt.AlignCenter)
-        info.setWordWrap(True)
-        info.setStyleSheet(
-            "background-color: transparent; padding: 16px 22px; border-radius: 10px;"
-        )
-        info.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        self.main_layout.addWidget(info)
-
-        # Technologies section
-        tech_header = QLabel("<h3>Technologies Used</h3>")
-        tech_header.setAlignment(Qt.AlignCenter)
-        tech_header.setStyleSheet("color:#ffd1d1; font-size:26px; font-weight: 800;")
-        self.main_layout.addWidget(tech_header, alignment=Qt.AlignCenter)
-
-        def make_chip(text: str) -> QWidget:
-            chip = QLabel(text)
-            chip.setAlignment(Qt.AlignCenter)
-            chip.setStyleSheet(
-                "color:#ffffff; background-color: transparent;"
-                "padding: 10px 14px; border-radius: 12px; font-size: 16px; font-weight: 800;"
-            )
-            w = QWidget()
-            l = QVBoxLayout(w)
-            l.setContentsMargins(0,0,0,0)
-            l.addWidget(chip)
-            return w
-
-        tech_row_container = QWidget()
-        tech_row = QHBoxLayout(tech_row_container)
-        tech_row.setContentsMargins(0,0,0,0)
-        tech_row.setSpacing(10)
-        tech_row.addWidget(make_chip("TensorFlow/Keras"))
-        tech_row.addWidget(make_chip("PyTorch"))
-        tech_row.addWidget(make_chip("PyQt5"))
-        tech_row.addWidget(make_chip("OpenCV & NumPy"))
-        tech_row.addWidget(make_chip("PyCryptodome"))
-
-        # Put chips in a horizontal scroll to keep one row if needed
-        tech_scroll = QScrollArea()
-        tech_scroll.setWidgetResizable(True)
-        tech_scroll.setFrameShape(QScrollArea.NoFrame)
-        tech_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        tech_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        # make scroll area and its viewport transparent
-        tech_scroll.setStyleSheet("QScrollArea{background:transparent;} QScrollArea>Viewport{background:transparent;} QWidget{background:transparent;}")
-        tech_row_container.setAttribute(Qt.WA_TranslucentBackground, True)
-        tech_row_container.setAutoFillBackground(False)
-        tech_scroll.setWidget(tech_row_container)
-        tech_scroll.setMaximumHeight(70)
-        self.main_layout.addWidget(tech_scroll)
-
-        # Feature cards (tiny boxes) — one row with horizontal scroll if needed
-        def make_card(title: str, desc: str, on_click) -> QWidget:
-            card = QWidget()
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(12, 10, 12, 12)
-            t = QLabel(title)
-            t.setAlignment(Qt.AlignCenter)
-            t.setStyleSheet("color:#d62828; font-size:20px; font-weight:900;")
-            d = QLabel(desc)
-            d.setAlignment(Qt.AlignCenter)
-            d.setWordWrap(True)
-            d.setStyleSheet("color:#f0f0f0; font-size:15px; font-weight:600;")
-            card_layout.addWidget(t)
-            card_layout.addWidget(d)
-            card.setStyleSheet("background-color: transparent; border-radius: 10px;")
-            card.setFixedWidth(260)
-            card.setCursor(Qt.PointingHandCursor)
-            # Click handler
-            def _mp(_: object = None):
-                try:
-                    on_click()
-                except Exception:
-                    pass
-            card.mousePressEvent = lambda e: _mp()
-            return card
-
-        features_row_container = QWidget()
-        features_row_container.setAttribute(Qt.WA_TranslucentBackground, True)
-        features_row_container.setAutoFillBackground(False)
-        features_row = QHBoxLayout(features_row_container)
-        features_row.setContentsMargins(0,0,0,0)
-        features_row.setSpacing(16)
-        features_row.addWidget(make_card("Hide", "Embed a secret image into a cover image using a CNN (auto‑resized to 224×224).", self.show_image_hiding_page))
-        features_row.addWidget(make_card("Reveal", "Recover the hidden secret image from a stego image using the paired model.", self.show_reveal_page))
-        features_row.addWidget(make_card("Encrypt", "Protect files with AES or Blowfish in CBC mode (key‑derived via SHA‑256).", self.show_encryption_page))
-        features_row.addWidget(make_card("Upscale", "Enhance image quality using ESRGAN ×4 (CPU/GPU).", self.show_super_resolution_page))
-
-        features_scroll = QScrollArea()
-        features_scroll.setWidgetResizable(True)
-        features_scroll.setFrameShape(QScrollArea.NoFrame)
-        features_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        features_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        # make features scroll area transparent
-        features_scroll.setStyleSheet("QScrollArea{background:transparent;} QScrollArea>Viewport{background:transparent;} QWidget{background:transparent;}")
-        features_scroll.setWidget(features_row_container)
-        features_scroll.setMaximumHeight(180)
-        self.main_layout.addWidget(features_scroll)
+        
+        if reply == QMessageBox.Yes:
+            # Clear user session
+            self.current_user = None
+            self.auth_token = None
+            self.is_authenticated = False
+            
+            # Update sidebar
+            self.update_sidebar_auth_state()
+            
+            # Show authentication screen
+            self.hide_sidebar()
+            self.show_auth_screen()
+            
+            QMessageBox.information(self, "Logged Out", "You have been successfully logged out.")
 
     def show_login_page(self):
+        # Set background image
+        bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
+        if os.path.exists(bg_path):
+            self.main_content.set_background_image(bg_path)
+        
         self.clear_main_layout()
+        
+        # Main container with fixed height to prevent scrolling
         container = QWidget()
-        row = QHBoxLayout(container)
-        row.setContentsMargins(0,0,0,0)
-        row.setSpacing(0)
+        container.setStyleSheet("background: transparent;")
+        main_layout = QVBoxLayout(container)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(15)
 
-        # Left column
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.addStretch()
+        # Compact header section
+        header_widget = QWidget()
+        header_widget.setStyleSheet("background: transparent;")
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setSpacing(8)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        
         logo = QLabel()
         lp = QPixmap(os.path.join(PROJECT_ROOT, "logo.png"))
         if not lp.isNull():
-            logo.setPixmap(lp.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo.setPixmap(lp.scaled(70, 70, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         logo.setAlignment(Qt.AlignCenter)
-        name = QLabel("<h1>ImageSteganography</h1>")
+        
+        name = QLabel("<h2 style='color: #ffffff; font-size: 26px; font-weight: bold; margin: 0;'>InvisiCipher</h2>")
         name.setAlignment(Qt.AlignCenter)
-        left_layout.addWidget(logo)
-        left_layout.addWidget(name)
-        left_layout.addStretch()
-
-        # Right column (form)
-        right = QWidget()
-        form = QVBoxLayout(right)
-        form.setContentsMargins(60,60,60,60)
-        title = QLabel("<h2>Log In</h2>")
-        form.addWidget(title)
+        name.setStyleSheet("color: #ffffff; margin: 0; padding: 0; background: transparent;")
+        
+        subtitle = QLabel("<p style='color: #cccccc; font-size: 16px; margin: 0;'>Secure Image Steganography</p>")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setStyleSheet("color: #cccccc; margin: 0; padding: 0; background: transparent;")
+        
+        header_layout.addWidget(logo)
+        header_layout.addWidget(name)
+        header_layout.addWidget(subtitle)
+        
+        # Login form container - optimal width for login form
+        form_container = QWidget()
+        optimal_width = min(450, int(self.width() * 0.35))
+        form_container.setFixedWidth(max(350, optimal_width))
+        form_container.setStyleSheet("""
+            QWidget {
+                background-color: rgba(40, 40, 40, 0.85);
+                border-radius: 12px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+            }
+        """)
+        
+        form_layout = QVBoxLayout(form_container)
+        form_layout.setSpacing(18)
+        form_layout.setContentsMargins(30, 35, 30, 35)
+        
+        # Form title
+        title = QLabel("<h3 style='color: #ffffff; font-size: 22px; font-weight: bold; text-align: center; margin: 0; border: none;'>Log In</h3>")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("color: #ffffff; margin-bottom: 15px; background: transparent; border: none;")
+        
+        # Form fields with larger labels
         id_label = QLabel("Username or Email")
+        id_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: 500; background: transparent; border: none;")
         id_input = CustomTextBox()
+        id_input.setStyleSheet("""
+            QLineEdit {
+                padding: 8px 12px;
+                border: 1px solid #555555;
+                border-radius: 6px;
+                background-color: rgba(60, 60, 60, 0.8);
+                color: #ffffff;
+                font-size: 13px;
+                min-height: 16px;
+            }
+            QLineEdit:focus {
+                border-color: #007acc;
+                background-color: rgba(70, 70, 70, 0.9);
+            }
+        """)
+        
         pwd_label = QLabel("Password")
+        pwd_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: 500; background: transparent; border: none;")
         pwd_input = CustomTextBox()
         pwd_input.setEchoMode(QLineEdit.Password)
+        pwd_input.setStyleSheet("""
+            QLineEdit {
+                padding: 8px 12px;
+                border: 1px solid #555555;
+                border-radius: 6px;
+                background-color: rgba(60, 60, 60, 0.8);
+                color: #ffffff;
+                font-size: 13px;
+                min-height: 16px;
+            }
+            QLineEdit:focus {
+                border-color: #007acc;
+                background-color: rgba(70, 70, 70, 0.9);
+            }
+        """)
+        
         submit = QPushButton("Log In")
+        submit.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                padding: 10px 25px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+                min-height: 16px;
+            }
+            QPushButton:hover {
+                background-color: #c82333;
+            }
+            QPushButton:pressed {
+                background-color: #bd2130;
+            }
+        """)
         submit.clicked.connect(lambda: self._login_request(id_input.text(), pwd_input.text()))
-        form.addWidget(id_label)
-        form.addWidget(id_input)
-        form.addWidget(pwd_label)
-        form.addWidget(pwd_input)
-        form.addWidget(submit)
-
-        # Assemble 50/50
-        left.setFixedWidth(700)
-        row.addWidget(left)
-        row.addWidget(right)
+        
+        # Add widgets to form
+        form_layout.addWidget(title)
+        form_layout.addWidget(id_label)
+        form_layout.addWidget(id_input)
+        form_layout.addWidget(pwd_label)
+        form_layout.addWidget(pwd_input)
+        form_layout.addWidget(submit)
+        
+        # Center the form horizontally
+        form_center_layout = QHBoxLayout()
+        form_center_layout.addStretch()
+        form_center_layout.addWidget(form_container)
+        form_center_layout.addStretch()
+        
+        # Add sections with controlled spacing
+        main_layout.addWidget(header_widget)
+        main_layout.addLayout(form_center_layout)
+        main_layout.addStretch()
+        
         self.main_layout.addWidget(container)
 
     def show_signup_page(self):
+        # Set background image
+        bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
+        if os.path.exists(bg_path):
+            self.main_content.set_background_image(bg_path)
+        
         self.clear_main_layout()
+        
+        # Main container with transparent background
         container = QWidget()
-        row = QHBoxLayout(container)
-        row.setContentsMargins(0,0,0,0)
-        row.setSpacing(0)
+        container.setStyleSheet("background: transparent;")
+        main_layout = QVBoxLayout(container)
+        main_layout.setContentsMargins(20, 15, 20, 15)
+        main_layout.setSpacing(10)
 
-        # Left column
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.addStretch()
+        # Compact header section
+        header_widget = QWidget()
+        header_widget.setStyleSheet("background: transparent;")
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setSpacing(6)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        
         logo = QLabel()
         lp = QPixmap(os.path.join(PROJECT_ROOT, "logo.png"))
         if not lp.isNull():
-            logo.setPixmap(lp.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo.setPixmap(lp.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         logo.setAlignment(Qt.AlignCenter)
-        name = QLabel("<h1>ImageSteganography</h1>")
+        
+        name = QLabel("<h3 style='color: #ffffff; font-size: 24px; font-weight: bold; margin: 0;'>InvisiCipher</h3>")
         name.setAlignment(Qt.AlignCenter)
-        left_layout.addWidget(logo)
-        left_layout.addWidget(name)
-        left_layout.addStretch()
-
-        # Right column (form)
-        right = QWidget()
-        form = QVBoxLayout(right)
-        form.setContentsMargins(60,60,60,60)
-        title = QLabel("<h2>Sign Up</h2>")
-        form.addWidget(title)
+        name.setStyleSheet("color: #ffffff; margin: 0; padding: 0; background: transparent;")
+        
+        subtitle = QLabel("<p style='color: #cccccc; font-size: 14px; margin: 0;'>Secure Image Steganography</p>")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setStyleSheet("color: #cccccc; margin: 0; padding: 0; background: transparent;")
+        
+        header_layout.addWidget(logo)
+        header_layout.addWidget(name)
+        header_layout.addWidget(subtitle)
+        
+        # Signup form container - optimal width for signup form
+        form_container = QWidget()
+        optimal_width = min(600, int(self.width() * 0.45))
+        form_container.setFixedWidth(max(450, optimal_width))
+        form_container.setStyleSheet("""
+            QWidget {
+                background-color: rgba(40, 40, 40, 0.85);
+                border-radius: 12px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+            }
+        """)
+        
+        form_layout = QVBoxLayout(form_container)
+        form_layout.setSpacing(12)
+        form_layout.setContentsMargins(30, 30, 30, 30)
+        
+        # Form title
+        title = QLabel("<h4 style='color: #ffffff; font-size: 20px; font-weight: bold; text-align: center; margin: 0; border: none;'>Sign Up</h4>")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("color: #ffffff; margin-bottom: 12px; background: transparent; border: none;")
+        
+        # Compact input and label styles
+        input_style = """
+            QLineEdit {
+                padding: 6px 10px;
+                border: 1px solid #555555;
+                border-radius: 5px;
+                background-color: rgba(60, 60, 60, 0.8);
+                color: #ffffff;
+                font-size: 12px;
+                min-height: 14px;
+            }
+            QLineEdit:focus {
+                border-color: #007acc;
+                background-color: rgba(70, 70, 70, 0.9);
+            }
+        """
+        
+        label_style = "color: #ffffff; font-size: 13px; font-weight: 500; background: transparent; border: none;"
+        
+        # Form fields with compact styling
         fn_label = QLabel("Full Name")
+        fn_label.setStyleSheet(label_style)
         fn_input = CustomTextBox()
+        fn_input.setStyleSheet(input_style)
+        
         em_label = QLabel("Email Address")
+        em_label.setStyleSheet(label_style)
         em_input = CustomTextBox()
+        em_input.setStyleSheet(input_style)
+        
         ph_label = QLabel("Phone Number")
+        ph_label.setStyleSheet(label_style)
         ph_input = CustomTextBox()
+        ph_input.setStyleSheet(input_style)
+        
         un_label = QLabel("Username")
+        un_label.setStyleSheet(label_style)
         un_input = CustomTextBox()
+        un_input.setStyleSheet(input_style)
+        
         pw_label = QLabel("Password")
+        pw_label.setStyleSheet(label_style)
         pw_input = CustomTextBox()
         pw_input.setEchoMode(QLineEdit.Password)
+        pw_input.setStyleSheet(input_style)
+        
+        cpw_label = QLabel("Confirm Password")
+        cpw_label.setStyleSheet(label_style)
+        cpw_input = CustomTextBox()
+        cpw_input.setEchoMode(QLineEdit.Password)
+        cpw_input.setStyleSheet(input_style)
+        
         submit = QPushButton("Sign Up")
-        submit.clicked.connect(lambda: self._signup_request(fn_input.text(), em_input.text(), ph_input.text(), un_input.text(), pw_input.text()))
-        for w in [fn_label, fn_input, em_label, em_input, ph_label, ph_input, un_label, un_input, pw_label, pw_input, submit]:
-            form.addWidget(w)
-
-        # Assemble 50/50
-        left.setFixedWidth(700)
-        row.addWidget(left)
-        row.addWidget(right)
+        submit.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                padding: 8px 20px;
+                border-radius: 5px;
+                font-size: 13px;
+                font-weight: bold;
+                min-height: 14px;
+                margin-top: 5px;
+            }
+            QPushButton:hover {
+                background-color: #c82333;
+            }
+            QPushButton:pressed {
+                background-color: #bd2130;
+            }
+        """)
+        submit.clicked.connect(lambda: self._signup_request(fn_input.text(), em_input.text(), ph_input.text(), un_input.text(), pw_input.text(), cpw_input.text()))
+        
+        # Add widgets to form
+        form_layout.addWidget(title)
+        form_layout.addWidget(fn_label)
+        form_layout.addWidget(fn_input)
+        form_layout.addWidget(em_label)
+        form_layout.addWidget(em_input)
+        form_layout.addWidget(ph_label)
+        form_layout.addWidget(ph_input)
+        form_layout.addWidget(un_label)
+        form_layout.addWidget(un_input)
+        form_layout.addWidget(pw_label)
+        form_layout.addWidget(pw_input)
+        form_layout.addWidget(cpw_label)
+        form_layout.addWidget(cpw_input)
+        form_layout.addWidget(submit)
+        
+        # Center the form horizontally
+        form_center_layout = QHBoxLayout()
+        form_center_layout.addStretch()
+        form_center_layout.addWidget(form_container)
+        form_center_layout.addStretch()
+        
+        # Add sections with minimal spacing
+        main_layout.addWidget(header_widget)
+        main_layout.addLayout(form_center_layout)
+        main_layout.addStretch()
+        
         self.main_layout.addWidget(container)
 
-    def _signup_request(self, full_name: str, email: str, phone: str, username: str, password: str):
+    def _validate_email(self, email: str) -> bool:
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        return re.match(pattern, email) is not None
+    
+    def _validate_phone(self, phone: str) -> bool:
+        # Remove any non-digit characters and check if it's exactly 10 digits
+        digits_only = re.sub(r'\D', '', phone)
+        return len(digits_only) == 10 and digits_only.isdigit()
+    
+    def _signup_request(self, full_name: str, email: str, phone: str, username: str, password: str, confirm_password: str):
+        # Validate required fields
+        if not all([full_name, email, username, password]):
+            QMessageBox.warning(self, "Sign Up Error", "Please fill in all required fields.")
+            return
+        
+        # Validate email format
+        if not self._validate_email(email):
+            QMessageBox.warning(self, "Sign Up Error", "Please enter a valid email address.")
+            return
+        
+        # Validate phone number (if provided)
+        if phone and not self._validate_phone(phone):
+            QMessageBox.warning(self, "Sign Up Error", "Please enter a valid 10-digit phone number.")
+            return
+        
+        # Validate password confirmation
+        if password != confirm_password:
+            QMessageBox.warning(self, "Sign Up Error", "Passwords do not match. Please try again.")
+            return
+        
+        # Validate password strength
+        if len(password) < 8:
+            QMessageBox.warning(self, "Sign Up Error", "Password must be at least 8 characters long.")
+            return
+            
         try:
-            r = requests.post(f"{BACKEND_BASE_URL}/api/auth/signup", json={
-                "full_name": full_name,
-                "email": email,
-                "phone": phone,
-                "username": username,
+            # Clean phone number - send empty string if not provided
+            clean_phone = phone.strip() if phone and phone.strip() else ""
+            
+            payload = {
+                "full_name": full_name.strip(),
+                "email": email.strip(),
+                "username": username.strip(),
                 "password": password
-            }, timeout=10)
+            }
+            
+            # Only include phone if it's not empty
+            if clean_phone:
+                payload["phone"] = clean_phone
+            
+            print(f"DEBUG: Sending signup request: {payload}")  # Debug log
+            
+            r = requests.post(f"{BACKEND_BASE_URL}/api/auth/signup", json=payload, timeout=10)
+            
             if r.status_code == 201:
-                QMessageBox.information(self, "Sign Up", "Account created. Please log in.")
+                QMessageBox.information(self, "Sign Up Success", "Account created successfully! Please log in.")
                 self.show_login_page()
             else:
-                QMessageBox.critical(self, "Sign Up Error", r.text)
+                print(f"DEBUG: Signup failed with status {r.status_code}: {r.text}")  # Debug log
+                try:
+                    error_data = r.json()
+                    if 'detail' in error_data:
+                        if isinstance(error_data['detail'], list):
+                            # Pydantic validation errors
+                            error_msgs = []
+                            for error in error_data['detail']:
+                                field = error.get('loc', ['unknown'])[-1]
+                                msg = error.get('msg', 'Invalid value')
+                                error_msgs.append(f"{field}: {msg}")
+                            error_msg = "Validation errors:\n" + "\n".join(error_msgs)
+                        else:
+                            error_msg = error_data['detail']
+                    else:
+                        error_msg = str(error_data)
+                except:
+                    error_msg = f"Registration failed (Status: {r.status_code})"
+                QMessageBox.critical(self, "Sign Up Error", error_msg)
+        except requests.exceptions.RequestException:
+            QMessageBox.critical(self, "Connection Error", "Cannot connect to authentication server. Please ensure the backend is running.")
         except Exception as e:
             QMessageBox.critical(self, "Sign Up Error", str(e))
 
     def _login_request(self, identifier: str, password: str):
+        if not identifier or not password:
+            QMessageBox.warning(self, "Login Error", "Please enter both username/email and password.")
+            return
+            
         try:
             r = requests.post(f"{BACKEND_BASE_URL}/api/auth/login", json={
                 "identifier": identifier,
                 "password": password
             }, timeout=10)
+            
             if r.status_code == 200:
                 data = r.json()
-                self.auth_token = data.get("token")
-                QMessageBox.information(self, "Log In", f"Welcome {data.get('user',{}).get('username','')}!")
+                self.current_user = data.get('user')
+                self.auth_token = data.get('token')
+                self.is_authenticated = True
+                QMessageBox.information(self, "Login Success", f"Welcome back, {self.current_user.get('username')}!")
+                self.show_sidebar()
+                self.update_sidebar_auth_state()
                 self.show_home_page()
             else:
-                QMessageBox.critical(self, "Log In Error", r.text)
+                print(f"DEBUG: Login failed with status {r.status_code}: {r.text}")  # Debug log
+                
+                if r.status_code == 401:
+                    # Unauthorized - user doesn't exist or wrong credentials
+                    reply = QMessageBox.question(
+                        self, 
+                        "Login Failed", 
+                        "Invalid username/email or password.\n\nDon't have an account yet?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.Yes
+                    )
+                    if reply == QMessageBox.Yes:
+                        self.show_signup_page()
+                else:
+                    # Other errors
+                    try:
+                        error_data = r.json()
+                        error_msg = error_data.get('detail', f'Login failed (Status: {r.status_code})')
+                    except:
+                        error_msg = f'Login failed (Status: {r.status_code})'
+                    QMessageBox.critical(self, "Login Error", error_msg)
+        except requests.exceptions.RequestException:
+            QMessageBox.critical(self, "Connection Error", "Cannot connect to authentication server. Please ensure the backend is running.")
         except Exception as e:
-            QMessageBox.critical(self, "Log In Error", str(e))
+            QMessageBox.critical(self, "Login Error", str(e))
 
     def perform_hide(self, cover_filepath: str, secret_filepath: str):
         if not cover_filepath or not secret_filepath:
@@ -1146,6 +1345,256 @@ class MainAppWindow(QMainWindow):
             self.key_text_box_of_dec.setText("")
         except Exception as e:
             QMessageBox.critical(self, "Decrypting Error", f"Failed to decrypt the file.\n{e}")
+
+    def clear_main_layout(self):
+        """Clear all widgets from the main layout"""
+        if self.main_layout:
+            while self.main_layout.count():
+                child = self.main_layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+
+    def show_home_page(self):
+        """Show home page with authentication check"""
+        # Only allow access to home page if authenticated
+        if not self.is_authenticated:
+            self.show_auth_screen()
+            return
+            
+        self.clear_main_layout()
+        # Apply page margins for full-width blocks
+        self.main_layout.setContentsMargins(16, 16, 16, 16)
+        # Logo on home page
+        logo_home = QLabel()
+        lp = QPixmap(os.path.join(PROJECT_ROOT, "logo.png"))
+        if not lp.isNull():
+            logo_home.setPixmap(lp.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        logo_home.setAlignment(Qt.AlignCenter)
+        self.main_layout.addWidget(logo_home)
+
+        # Welcome message
+        welcome_label = QLabel("<h1 style='color: #ffffff; text-align: center;'>Welcome to InvisiCipher</h1>")
+        welcome_label.setAlignment(Qt.AlignCenter)
+        welcome_label.setStyleSheet("color: #ffffff; margin: 20px 0;")
+        self.main_layout.addWidget(welcome_label)
+
+        # Description
+        desc_label = QLabel("<p style='color: #cccccc; text-align: center; font-size: 16px;'>Advanced Image Steganography and Encryption Platform</p>")
+        desc_label.setAlignment(Qt.AlignCenter)
+        desc_label.setStyleSheet("color: #cccccc; margin: 10px 0;")
+        self.main_layout.addWidget(desc_label)
+
+        # Features section
+        features_title = QLabel("<h2 style='color: #ffffff; text-align: center;'>Available Features</h2>")
+        features_title.setAlignment(Qt.AlignCenter)
+        features_title.setStyleSheet("color: #ffffff; margin: 30px 0 20px 0;")
+        self.main_layout.addWidget(features_title)
+
+        # Create horizontal scrollable features row
+        features_scroll = QScrollArea()
+        features_row_container = QWidget()
+        features_row_layout = QHBoxLayout(features_row_container)
+        features_row_layout.setSpacing(20)
+        features_row_layout.setContentsMargins(10, 10, 10, 10)
+
+        # Feature cards
+        features = [
+            ("Image Hide", "Hide secret images within cover images using deep learning", self.show_image_hide_page),
+            ("Image Reveal", "Extract hidden images from steganographic containers", self.show_reveal_page),
+            ("Encryption", "Encrypt images with AES or Blowfish algorithms", self.show_image_hide_page),
+            ("Decryption", "Decrypt protected images back to original form", self.show_decryption_page),
+            ("Super Resolution", "Enhance image quality using ESRGAN technology", self.show_super_resolution_page)
+        ]
+
+        for title, description, handler in features:
+            feature_card = QWidget()
+            feature_card.setFixedSize(200, 150)
+            feature_card.setStyleSheet("""
+                QWidget {
+                    background-color: rgba(40, 40, 40, 0.8);
+                    border-radius: 10px;
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                }
+                QWidget:hover {
+                    background-color: rgba(60, 60, 60, 0.9);
+                    border: 1px solid rgba(220, 53, 69, 0.5);
+                }
+            """)
+            
+            card_layout = QVBoxLayout(feature_card)
+            card_layout.setContentsMargins(15, 15, 15, 15)
+            
+            title_label = QLabel(f"<h3 style='color: #ffffff; margin: 0;'>{title}</h3>")
+            title_label.setAlignment(Qt.AlignCenter)
+            title_label.setStyleSheet("color: #ffffff; background: transparent; border: none;")
+            
+            desc_label = QLabel(f"<p style='color: #cccccc; font-size: 12px; margin: 0;'>{description}</p>")
+            desc_label.setAlignment(Qt.AlignCenter)
+            desc_label.setWordWrap(True)
+            desc_label.setStyleSheet("color: #cccccc; background: transparent; border: none;")
+            
+            card_layout.addWidget(title_label)
+            card_layout.addWidget(desc_label)
+            card_layout.addStretch()
+            
+            # Make card clickable
+            feature_card.mousePressEvent = lambda event, h=handler: h()
+            
+            features_row_layout.addWidget(feature_card)
+
+        features_row_layout.addStretch()
+        
+        # Configure scroll area
+        features_scroll.setWidget(features_row_container)
+        features_scroll.setWidgetResizable(True)
+        features_scroll.setFrameShape(QScrollArea.NoFrame)
+        features_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        features_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # make features scroll area transparent
+        features_scroll.setStyleSheet("QScrollArea{background:transparent;} QScrollArea>Viewport{background:transparent;} QWidget{background:transparent;}")
+        features_scroll.setMaximumHeight(180)
+        self.main_layout.addWidget(features_scroll)
+
+    def update_sidebar_auth_state(self):
+        """Update sidebar buttons based on authentication state"""
+        # Find the logout button and update it
+        side_navigation = self.findChild(QWidget, "side_navigation")
+        if side_navigation:
+            logout_button = side_navigation.findChild(QPushButton, "logout_button")
+            if logout_button:
+                if self.is_authenticated:
+                    logout_button.setText("Logout")
+                    logout_button.clicked.disconnect()
+                    logout_button.clicked.connect(self.handle_logout)
+                else:
+                    logout_button.setText("Exit")
+                    logout_button.clicked.disconnect()
+                    logout_button.clicked.connect(self.close)
+
+    def load_stylesheet(self):
+        """Load application stylesheet"""
+        stylesheet_path = os.path.join(BASE_DIR, "styles", "style.qss")
+        if os.path.exists(stylesheet_path):
+            with open(stylesheet_path, 'r') as f:
+                self.setStyleSheet(f.read())
+        else:
+            # Default dark theme if stylesheet not found
+            self.setStyleSheet("""
+                QMainWindow {
+                    background-color: #2b2b2b;
+                    color: #ffffff;
+                }
+                QPushButton {
+                    background-color: #dc3545;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #c82333;
+                }
+                QLabel {
+                    color: #ffffff;
+                }
+            """)
+
+    def set_label_placeholder(self, label, width, height, text):
+        """Set placeholder image for label"""
+        pixmap = QPixmap(width, height)
+        pixmap.fill(Qt.gray)
+        label.setPixmap(pixmap)
+        label.setText(text)
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet("border: 2px dashed #666; color: #ccc;")
+
+    def set_label_image_box(self, label, image_path, width, height):
+        """Set image in label with proper scaling"""
+        try:
+            pixmap = QPixmap(image_path)
+            if not pixmap.isNull():
+                scaled_pixmap = pixmap.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                label.setPixmap(scaled_pixmap)
+                label.setStyleSheet("border: 1px solid #444;")
+        except Exception as e:
+            print(f"Error loading image: {e}")
+            self.set_label_placeholder(label, width, height, "Error loading image")
+
+    def select_image(self, label):
+        """Select image file and display in label"""
+        file_dialog = QFileDialog()
+        filepath, _ = file_dialog.getOpenFileName(
+            self, 
+            "Select Image", 
+            "", 
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.tiff)"
+        )
+        if filepath:
+            self.set_label_image_box(label, filepath, 256, 256)
+            return filepath
+        return None
+
+    def select_cover_image(self, label):
+        """Select cover image for steganography"""
+        filepath = self.select_image(label)
+        if filepath:
+            self.cover_image_filepath = filepath
+
+    def select_secret_image(self, label):
+        """Select secret image for steganography"""
+        filepath = self.select_image(label)
+        if filepath:
+            self.secret_image_filepath = filepath
+
+    def select_container_image(self, label):
+        """Select container image for reveal"""
+        filepath = self.select_image(label)
+        if filepath:
+            self.container_image_filepath = filepath
+
+    def select_dec_image(self, label):
+        """Select encrypted image for decryption"""
+        filepath = self.select_image(label)
+        if filepath:
+            self.enc_filepath = filepath
+
+    def select_low_res_image(self, label):
+        """Select low resolution image for super resolution"""
+        filepath = self.select_image(label)
+        if filepath:
+            self.low_res_image_filepath = filepath
+
+    def download_image(self):
+        """Download the last processed image"""
+        if hasattr(self, 'last_download_path') and self.last_download_path:
+            file_dialog = QFileDialog()
+            save_path, _ = file_dialog.getSaveFileName(
+                self,
+                "Save Image",
+                "",
+                "Image Files (*.png *.jpg *.jpeg)"
+            )
+            if save_path:
+                try:
+                    shutil.copy2(self.last_download_path, save_path)
+                    QMessageBox.information(self, "Success", f"Image saved to {save_path}")
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to save image: {e}")
+        else:
+            QMessageBox.warning(self, "No Image", "No image available for download")
+
+    def hide_sidebar(self):
+        """Hide the sidebar during authentication"""
+        side_navigation = self.findChild(QWidget, "side_navigation")
+        if side_navigation:
+            side_navigation.hide()
+
+    def show_sidebar(self):
+        """Show the sidebar after authentication"""
+        side_navigation = self.findChild(QWidget, "side_navigation")
+        if side_navigation:
+            side_navigation.show()
 
 
 # Create the application

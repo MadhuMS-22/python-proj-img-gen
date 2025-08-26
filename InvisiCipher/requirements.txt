@@ -1,10 +1,10 @@
-tensorflow==2.10.0
+tensorflow-cpu==2.16.1
 torch
-opencv-python
+opencv-python==4.8.1.78
 Pillow
 pycryptodome
 PyQt5
-numpy
+numpy==1.26.4
 imageio
 fastapi
 uvicorn
