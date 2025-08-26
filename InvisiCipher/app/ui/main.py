@@ -109,9 +109,9 @@ class MainAppWindow(QMainWindow):
         super_resolution_button = QPushButton("Super Resolution")
 
         # Connect button signals to their corresponding slots
-        encryption_button.clicked.connect(self.show_image_hide_page)
+        encryption_button.clicked.connect(self.show_encryption_page)
         decryption_button.clicked.connect(self.show_decryption_page)
-        image_hiding_button.clicked.connect(self.show_image_hide_page)
+        image_hiding_button.clicked.connect(self.show_image_hiding_page)
         image_reveal_button.clicked.connect(self.show_reveal_page)
         super_resolution_button.clicked.connect(self.show_super_resolution_page)
 
@@ -183,7 +183,7 @@ class MainAppWindow(QMainWindow):
         # Clear the main window layout
         self.clear_main_layout()
 
-    def show_image_hide_page(self):
+    def show_encryption_page(self):
         # Only allow access if authenticated
         if not self.is_authenticated:
             self.show_auth_screen()
@@ -283,10 +283,17 @@ class MainAppWindow(QMainWindow):
         self.main_layout.addWidget(button_layout_widget)
 
     def show_decryption_page(self):
+        # Only allow access if authenticated
+        if not self.is_authenticated:
+            self.show_auth_screen()
+            return
+            
         bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
         if os.path.exists(bg_path):
             self.main_content.set_background_image(bg_path)
-        self.key_text_box_of_dec = None
+        self.image_tobe_dec_filepath = None
+        self.key_text_box = None
+        self.dec_img_text_label = None
         # Clear the main window layout
         self.clear_main_layout()
 
@@ -375,6 +382,11 @@ class MainAppWindow(QMainWindow):
         self.main_layout.addWidget(button_layout_widget)
 
     def show_image_hiding_page(self):
+        # Only allow access if authenticated
+        if not self.is_authenticated:
+            self.show_auth_screen()
+            return
+            
         bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
         if os.path.exists(bg_path):
             self.main_content.set_background_image(bg_path)
@@ -473,9 +485,15 @@ class MainAppWindow(QMainWindow):
         self.main_layout.addWidget(button_layout_widget)
 
     def show_reveal_page(self):
+        # Only allow access if authenticated
+        if not self.is_authenticated:
+            self.show_auth_screen()
+            return
+            
         bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
         if os.path.exists(bg_path):
             self.main_content.set_background_image(bg_path)
+        self.steg_image_filepath = None
         self.clear_main_layout()
 
         # Add content to the super resolution page
@@ -555,11 +573,10 @@ class MainAppWindow(QMainWindow):
             self.show_auth_screen()
             return
             
-        # ensure bg applied
         bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
         if os.path.exists(bg_path):
             self.main_content.set_background_image(bg_path)
-        self.low_res_image_filepath = None
+        self.steg_image_filepath = None
         # Clear the main window layout
         self.clear_main_layout()
 
@@ -628,140 +645,74 @@ class MainAppWindow(QMainWindow):
         self.image_label = image_label
         self.download_HR_button = download_button
 
-    def show_reveal_page(self):
-        bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
-        if os.path.exists(bg_path):
-            self.main_content.set_background_image(bg_path)
-        self.clear_main_layout()
-
-        # Add content to the super resolution page
-        title_label = QLabel("<H2>STEGO CNN : Steganography Reveal</H2>")
-        title_label.setStyleSheet("font-size: 24px; color: #ffffff;")
-        title_label.setAlignment(Qt.AlignTop)
-        self.main_layout.addWidget(title_label)
-
-        # STEGO CNN model path label
-        model_path_label = QLabel("<h5>Model Path: InvisiCipher/app/models/DEEP_STEGO/models/reveal.h5</h5>")
-        model_path_label.setStyleSheet("font-size: 16px; color: #c6c6c6;")
-        model_path_label.setAlignment(Qt.AlignTop)
-        self.main_layout.addWidget(model_path_label)
-
-        # GPU Info
-        gpu_info_label = QLabel("<b><ul><li>Device info will appear if available</li></ul></b>")
-        gpu_info_label.setStyleSheet("font-size: 13px; color: #fae69e;")
-        gpu_info_label.setAlignment(Qt.AlignTop)
-        self.main_layout.addWidget(gpu_info_label)
-
-        # image text layout
-        image_text_layout = QHBoxLayout()
-        container_text_label = QLabel("Select steg image:")
-        container_text_label.setAlignment(Qt.AlignCenter)
-        container_text_label.setStyleSheet("font-size: 16px; color: #c6c6c6; margin-bottom: 10px; font-weight: bold;")
-        image_text_layout.addWidget(container_text_label)
-
-        secret_out_text_label = QLabel("Revealed secret image:")
-        secret_out_text_label.setAlignment(Qt.AlignCenter)
-        secret_out_text_label.setStyleSheet("font-size: 16px; color: #00ff00; margin-bottom: 10px; font-weight: bold;")
-        image_text_layout.addWidget(secret_out_text_label)
-        # keep a reference for status updates after reveal
-        self.secret_out_text_label = secret_out_text_label
-
-        image_text_layout_widget = QWidget()
-        image_text_layout_widget.setLayout(image_text_layout)
-        self.main_layout.addWidget(image_text_layout_widget)
-        
-        # Image display layout
-        image_layout = QHBoxLayout()
-        self.container_display_label = QLabel()
-        self.container_display_label.setAlignment(Qt.AlignCenter)
-        self.set_label_placeholder(self.container_display_label, 256, 256, "Select the image")
-        image_layout.addWidget(self.container_display_label)
-        
-        self.secret_out_display_label = QLabel()
-        self.secret_out_display_label.setAlignment(Qt.AlignCenter)
-        self.set_label_placeholder(self.secret_out_display_label, 256, 256, "Select the image")
-        image_layout.addWidget(self.secret_out_display_label)
-
-        image_layout_widget = QWidget()
-        image_layout_widget.setLayout(image_layout)
-        self.main_layout.addWidget(image_layout_widget)
-
-        # button layout
-        button_layout = QHBoxLayout()
-        clear_button = QPushButton("Clear")
-        clear_button.clicked.connect(lambda: self.show_reveal_page())
-        button_layout.addWidget(clear_button)
-
-        browse_cover_button = QPushButton("Browse steg image")
-        browse_cover_button.clicked.connect(lambda: self.select_container_image(self.container_display_label))
-        button_layout.addWidget(browse_cover_button)
-
-        reveal_button = QPushButton("Reveal")
-        reveal_button.clicked.connect(lambda: self.perform_reveal(self.container_image_filepath))
-        button_layout.addWidget(reveal_button)
-
-        self.download_revealed_secret_image_button = QPushButton("Download🔽")
-        self.download_revealed_secret_image_button.setEnabled(False)
-        self.download_revealed_secret_image_button.clicked.connect(lambda: self.download_image())
-        button_layout.addWidget(self.download_revealed_secret_image_button)
-
-        button_layout_widget = QWidget()
-        button_layout_widget.setLayout(button_layout)
-        self.main_layout.addWidget(button_layout_widget)
-
     def show_decryption_page(self):
         # Only allow access if authenticated
         if not self.is_authenticated:
             self.show_auth_screen()
             return
             
-        # ensure bg applied
         bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
         if os.path.exists(bg_path):
             self.main_content.set_background_image(bg_path)
-        
+        self.image_tobe_dec_filepath = None
+        self.key_text_box = None
+        self.dec_img_text_label = None
+        # Clear the main window layout
         self.clear_main_layout()
 
         # Add content to the decryption page
-        title_label = QLabel("<H2>STEGO CNN : Steganography Decrypt</H2>")
+        title_label = QLabel("<H2>Image Decryption</H2>")
         title_label.setStyleSheet("font-size: 24px; color: #ffffff;")
         title_label.setAlignment(Qt.AlignTop)
         self.main_layout.addWidget(title_label)
 
-        # STEGO CNN model path label
-        model_path_label = QLabel("<h5>Model Path: InvisiCipher/app/models/DEEP_STEGO/models/decrypt.h5</h5>")
-        model_path_label.setStyleSheet("font-size: 16px; color: #c6c6c6;")
-        model_path_label.setAlignment(Qt.AlignTop)
-        self.main_layout.addWidget(model_path_label)
-
-        # GPU Info
-        gpu_info_label = QLabel("<b><ul><li>Device info will appear if available</li></ul></b>")
-        gpu_info_label.setStyleSheet("font-size: 13px; color: #fae69e;")
-        gpu_info_label.setAlignment(Qt.AlignTop)
-        self.main_layout.addWidget(gpu_info_label)
-
         # label layout
         label_layout = QHBoxLayout()
-        enc_text_label = QLabel("Select encrypted image:")
-        enc_text_label.setAlignment(Qt.AlignCenter)
-        enc_text_label.setStyleSheet("font-size: 16px; color: #c6c6c6; margin-bottom: 10px; font-weight: bold;")
-        label_layout.addWidget(enc_text_label)
 
-        dec_text_label = QLabel("Decrypted image:")
-        dec_text_label.setAlignment(Qt.AlignCenter)
-        dec_text_label.setStyleSheet("font-size: 16px; color: #00ff00; margin-bottom: 10px; font-weight: bold;")
-        label_layout.addWidget(dec_text_label)
+        method_text_label = QLabel("Select decryption method:")
+        method_text_label.setAlignment(Qt.AlignVCenter)
+        method_text_label.setStyleSheet("font-size: 16px; color: #c6c6c6; margin-bottom: 10px; font-weight: bold;")
+        label_layout.addWidget(method_text_label)
+
+        self.dec_img_text_label = QLabel("Select Image to be Decrypted:")
+        self.dec_img_text_label.setAlignment(Qt.AlignCenter)
+        self.dec_img_text_label.setStyleSheet("font-size: 16px; color: #c6c6c6; margin-bottom: 10px; font-weight: bold;")
+        label_layout.addWidget(self.dec_img_text_label)
 
         label_layout_widget = QWidget()
         label_layout_widget.setLayout(label_layout)
         self.main_layout.addWidget(label_layout_widget)
 
-        # Image  display layout
+        # Image display layout
         image_display_layout = QHBoxLayout()
-        self.enc_display_label = QLabel()
-        self.enc_display_label.setAlignment(Qt.AlignCenter)
-        self.set_label_placeholder(self.enc_display_label, 256, 256, "Select the image")
-        image_display_layout.addWidget(self.enc_display_label)
+
+        radio_layout = QVBoxLayout()
+        radio_layout.setAlignment(Qt.AlignLeft)
+        self.aes_radio_dec = QRadioButton("AES Decryption")
+        self.aes_radio_dec.setToolTip("Widely adopted symmetric-key block cipher with strong security and flexibility")
+
+        self.blowfish_radio_dec = QRadioButton("Blowfish Decryption")
+        self.blowfish_radio_dec.setToolTip("Fast, efficient symmetric-key block cipher with versatile key lengths")
+
+        # Set AES as default
+        self.aes_radio_dec.setChecked(True)
+
+        radio_layout.addWidget(self.aes_radio_dec)
+        radio_layout.addWidget(self.blowfish_radio_dec)
+
+        # Add key input
+        key_label = QLabel("Enter decryption key:")
+        key_label.setStyleSheet("font-size: 14px; color: #c6c6c6; margin-top: 20px;")
+        radio_layout.addWidget(key_label)
+
+        self.key_text_box_dec = QLineEdit()
+        self.key_text_box_dec.setPlaceholderText("Enter your secret key")
+        self.key_text_box_dec.setStyleSheet("padding: 8px; font-size: 14px; border: 1px solid #555; border-radius: 4px; background-color: #333; color: #fff;")
+        radio_layout.addWidget(self.key_text_box_dec)
+
+        radio_layout_widget = QWidget()
+        radio_layout_widget.setLayout(radio_layout)
+        image_display_layout.addWidget(radio_layout_widget)
 
         self.dec_display_label = QLabel()
         self.dec_display_label.setAlignment(Qt.AlignCenter)
@@ -778,12 +729,12 @@ class MainAppWindow(QMainWindow):
         clear_button.clicked.connect(lambda: self.show_decryption_page())
         button_layout.addWidget(clear_button)
 
-        browse_enc_button = QPushButton("Browse encrypted file")
-        browse_enc_button.clicked.connect(lambda: self.select_dec_image(self.dec_display_label))
-        button_layout.addWidget(browse_enc_button)
+        browse_button = QPushButton("Browse image")
+        browse_button.clicked.connect(lambda: self.select_image_to_decrypt(self.dec_display_label))
+        button_layout.addWidget(browse_button)
 
         decrypt_button = QPushButton("Decrypt")
-        decrypt_button.clicked.connect(lambda: self.perform_decryption(self.enc_filepath))
+        decrypt_button.clicked.connect(lambda: self.perform_decryption(self.image_tobe_dec_filepath, self.key_text_box_dec.text()))
         button_layout.addWidget(decrypt_button)
 
         self.download_dec_button = QPushButton("Download🔽")
@@ -1361,99 +1312,47 @@ class MainAppWindow(QMainWindow):
             self.show_auth_screen()
             return
             
+        # Set background image
+        bg_path = os.path.join(PROJECT_ROOT, "bg.jpg")
+        if os.path.exists(bg_path):
+            self.main_content.set_background_image(bg_path)
+            
+        # Clear the main window layout
         self.clear_main_layout()
-        # Apply page margins for full-width blocks
-        self.main_layout.setContentsMargins(16, 16, 16, 16)
-        # Logo on home page
-        logo_home = QLabel()
-        lp = QPixmap(os.path.join(PROJECT_ROOT, "logo.png"))
-        if not lp.isNull():
-            logo_home.setPixmap(lp.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        logo_home.setAlignment(Qt.AlignCenter)
-        self.main_layout.addWidget(logo_home)
 
-        # Welcome message
-        welcome_label = QLabel("<h1 style='color: #ffffff; text-align: center;'>Welcome to InvisiCipher</h1>")
-        welcome_label.setAlignment(Qt.AlignCenter)
-        welcome_label.setStyleSheet("color: #ffffff; margin: 20px 0;")
-        self.main_layout.addWidget(welcome_label)
+        # Add content to the home page
+        title_label = QLabel("<H1>InvisiCipher</H1>")
+        title_label.setStyleSheet("font-size: 48px; color: #ffffff; font-weight: bold;")
+        title_label.setAlignment(Qt.AlignCenter)
+        self.main_layout.addWidget(title_label)
 
-        # Description
-        desc_label = QLabel("<p style='color: #cccccc; text-align: center; font-size: 16px;'>Advanced Image Steganography and Encryption Platform</p>")
+        subtitle_label = QLabel("<H3>Advanced Image Steganography and Encryption Platform</H3>")
+        subtitle_label.setStyleSheet("font-size: 18px; color: #c6c6c6; margin-bottom: 20px;")
+        subtitle_label.setAlignment(Qt.AlignCenter)
+        self.main_layout.addWidget(subtitle_label)
+
+        # Description text
+        description = """
+        <div style='text-align: center; color: #ffffff; font-size: 16px; line-height: 1.6;'>
+            <p><b>InvisiCipher</b> combines cutting-edge deep learning with robust encryption to provide:</p>
+            <ul style='text-align: left; max-width: 600px; margin: 0 auto;'>
+                <li><b>Deep Learning Steganography:</b> Hide secret images within cover images using CNN-based models</li>
+                <li><b>Advanced Encryption:</b> Secure your images with AES and Blowfish encryption algorithms</li>
+                <li><b>Super Resolution:</b> Enhance image quality using ESRGAN technology</li>
+                <li><b>Complete Workflow:</b> Hide, encrypt, decrypt, and reveal with seamless integration</li>
+            </ul>
+            <p style='margin-top: 20px;'><i>Select a feature from the sidebar to get started!</i></p>
+        </div>
+        """
+        
+        desc_label = QLabel(description)
+        desc_label.setStyleSheet("color: #ffffff; margin: 20px; padding: 20px;")
         desc_label.setAlignment(Qt.AlignCenter)
-        desc_label.setStyleSheet("color: #cccccc; margin: 10px 0;")
+        desc_label.setWordWrap(True)
         self.main_layout.addWidget(desc_label)
 
-        # Features section
-        features_title = QLabel("<h2 style='color: #ffffff; text-align: center;'>Available Features</h2>")
-        features_title.setAlignment(Qt.AlignCenter)
-        features_title.setStyleSheet("color: #ffffff; margin: 30px 0 20px 0;")
-        self.main_layout.addWidget(features_title)
-
-        # Create horizontal scrollable features row
-        features_scroll = QScrollArea()
-        features_row_container = QWidget()
-        features_row_layout = QHBoxLayout(features_row_container)
-        features_row_layout.setSpacing(20)
-        features_row_layout.setContentsMargins(10, 10, 10, 10)
-
-        # Feature cards
-        features = [
-            ("Image Hide", "Hide secret images within cover images using deep learning", self.show_image_hide_page),
-            ("Image Reveal", "Extract hidden images from steganographic containers", self.show_reveal_page),
-            ("Encryption", "Encrypt images with AES or Blowfish algorithms", self.show_image_hide_page),
-            ("Decryption", "Decrypt protected images back to original form", self.show_decryption_page),
-            ("Super Resolution", "Enhance image quality using ESRGAN technology", self.show_super_resolution_page)
-        ]
-
-        for title, description, handler in features:
-            feature_card = QWidget()
-            feature_card.setFixedSize(200, 150)
-            feature_card.setStyleSheet("""
-                QWidget {
-                    background-color: rgba(40, 40, 40, 0.8);
-                    border-radius: 10px;
-                    border: 1px solid rgba(255, 255, 255, 0.1);
-                }
-                QWidget:hover {
-                    background-color: rgba(60, 60, 60, 0.9);
-                    border: 1px solid rgba(220, 53, 69, 0.5);
-                }
-            """)
-            
-            card_layout = QVBoxLayout(feature_card)
-            card_layout.setContentsMargins(15, 15, 15, 15)
-            
-            title_label = QLabel(f"<h3 style='color: #ffffff; margin: 0;'>{title}</h3>")
-            title_label.setAlignment(Qt.AlignCenter)
-            title_label.setStyleSheet("color: #ffffff; background: transparent; border: none;")
-            
-            desc_label = QLabel(f"<p style='color: #cccccc; font-size: 12px; margin: 0;'>{description}</p>")
-            desc_label.setAlignment(Qt.AlignCenter)
-            desc_label.setWordWrap(True)
-            desc_label.setStyleSheet("color: #cccccc; background: transparent; border: none;")
-            
-            card_layout.addWidget(title_label)
-            card_layout.addWidget(desc_label)
-            card_layout.addStretch()
-            
-            # Make card clickable
-            feature_card.mousePressEvent = lambda event, h=handler: h()
-            
-            features_row_layout.addWidget(feature_card)
-
-        features_row_layout.addStretch()
-        
-        # Configure scroll area
-        features_scroll.setWidget(features_row_container)
-        features_scroll.setWidgetResizable(True)
-        features_scroll.setFrameShape(QScrollArea.NoFrame)
-        features_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        features_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        # make features scroll area transparent
-        features_scroll.setStyleSheet("QScrollArea{background:transparent;} QScrollArea>Viewport{background:transparent;} QWidget{background:transparent;}")
-        features_scroll.setMaximumHeight(180)
-        self.main_layout.addWidget(features_scroll)
+        # Add some spacing
+        self.main_layout.addStretch()
 
     def update_sidebar_auth_state(self):
         """Update sidebar buttons based on authentication state"""
